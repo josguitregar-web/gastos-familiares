@@ -6,8 +6,11 @@ import { Expense, getEvaluatedStatus, ExpenseCategory } from "@/types/expense";
 interface ExpenseTableProps {
   expenses: Expense[];
   onToggleStatus: (expense: Expense) => void;
-  onSyncCalendar: (expense: Expense) => void;
-  onEditExpense?: (expense: Expense) => void;
+  onOpenCalendarExport: (expense: Expense) => void;
+  onEditExpense: (expense: Expense) => void;
+  selectedIds: string[];
+  onToggleSelectRow: (id: string) => void;
+  onToggleSelectAll: () => void;
   referenceDate?: Date;
   monthName?: string;
   year?: number;
@@ -16,20 +19,26 @@ interface ExpenseTableProps {
 export const ExpenseTable: React.FC<ExpenseTableProps> = ({
   expenses,
   onToggleStatus,
-  onSyncCalendar,
+  onOpenCalendarExport,
   onEditExpense,
+  selectedIds,
+  onToggleSelectRow,
+  onToggleSelectAll,
   referenceDate = new Date(),
   monthName = "Sep",
   year = 2026,
 }) => {
-  const getCategoryIcon = (categoria: ExpenseCategory, concepto: string) => {
+  const getCategoryIcon = (categoria: ExpenseCategory, concepto: string, iconoPersonalizado?: string) => {
+    if (iconoPersonalizado) return iconoPersonalizado;
+
     const c = concepto.toLowerCase();
     if (c.includes("luz") || c.includes("cfe") || c.includes("gas")) return "bolt";
-    if (c.includes("telmex") || c.includes("internet") || c.includes("izzi")) return "router";
+    if (c.includes("telmex") || c.includes("internet") || c.includes("izzi") || c.includes("wifi")) return "wifi";
     if (c.includes("agua")) return "water_drop";
     if (c.includes("auto") || c.includes("seguro")) return "directions_car";
     if (c.includes("renta") || c.includes("depto") || c.includes("mantenimiento")) return "home";
     if (c.includes("colegiatura") || c.includes("escuela")) return "school";
+    if (c.includes("mercado") || c.includes("super")) return "shopping_cart";
 
     switch (categoria) {
       case "Vivienda":
@@ -42,7 +51,7 @@ export const ExpenseTable: React.FC<ExpenseTableProps> = ({
         return "credit_card";
       case "Servicios":
       default:
-        return "receipt_long";
+        return "receipt";
     }
   };
 
@@ -55,6 +64,7 @@ export const ExpenseTable: React.FC<ExpenseTableProps> = ({
   };
 
   const totalAcumulado = expenses.reduce((acc, curr) => acc + Number(curr.monto), 0);
+  const isAllSelected = expenses.length > 0 && selectedIds.length === expenses.length;
 
   return (
     <div className="bg-surface-container-low rounded-xl overflow-hidden shadow-xl transition-all" id="tableViewContainer">
@@ -62,7 +72,17 @@ export const ExpenseTable: React.FC<ExpenseTableProps> = ({
         <table className="w-full text-left border-collapse">
           <thead>
             <tr className="bg-surface-container text-on-surface-variant font-label-md text-label-md uppercase tracking-wider">
-              <th className="py-space-md px-space-lg w-28" scope="col">
+              {/* Checkbox seleccionar todo */}
+              <th className="py-space-md pl-space-lg pr-2 w-12 text-center" scope="col">
+                <input
+                  type="checkbox"
+                  checked={isAllSelected}
+                  onChange={onToggleSelectAll}
+                  className="w-4 h-4 rounded border-outline-variant/40 bg-surface-container-high text-primary focus:ring-primary focus:ring-offset-0 cursor-pointer accent-primary"
+                  title={isAllSelected ? "Deseleccionar todos" : "Seleccionar todos"}
+                />
+              </th>
+              <th className="py-space-md px-space-md w-28" scope="col">
                 Fecha
               </th>
               <th className="py-space-md px-space-lg" scope="col">
@@ -85,7 +105,7 @@ export const ExpenseTable: React.FC<ExpenseTableProps> = ({
           <tbody className="font-body-md text-body-md divide-y divide-surface-container" id="transactionTableBody">
             {expenses.length === 0 ? (
               <tr>
-                <td colSpan={6} className="py-12 text-center text-on-surface-variant font-body-md">
+                <td colSpan={7} className="py-12 text-center text-on-surface-variant font-body-md">
                   No se encontraron gastos que coincidan con los filtros seleccionados.
                 </td>
               </tr>
@@ -93,21 +113,37 @@ export const ExpenseTable: React.FC<ExpenseTableProps> = ({
               expenses.map((expense) => {
                 const status = getEvaluatedStatus(expense, referenceDate);
                 const diaStr = String(expense.dia).padStart(2, "0");
-                const iconName = getCategoryIcon(expense.categoria, expense.concepto);
+                const iconName = getCategoryIcon(expense.categoria, expense.concepto, expense.icono);
                 const methodIcon = getMethodIcon(expense.metodo);
                 const isPaid = status === "Hecho";
                 const isOverdue = status === "Vencido";
+                const isChecked = selectedIds.includes(expense.id);
 
                 return (
                   <tr
                     key={expense.id}
-                    className="ledger-row hover:bg-surface-container transition-colors group"
+                    className={`ledger-row transition-colors group ${
+                      isChecked
+                        ? "bg-surface-container-high/80"
+                        : "hover:bg-surface-container"
+                    }`}
                     data-category={expense.categoria}
                     data-status={status}
                   >
+                    {/* Checkbox individual */}
+                    <td className="py-space-md pl-space-lg pr-2 text-center">
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => onToggleSelectRow(expense.id)}
+                        className="w-4 h-4 rounded border-outline-variant/40 bg-surface-container-high text-primary focus:ring-primary focus:ring-offset-0 cursor-pointer accent-primary"
+                        title="Seleccionar para exportar a Google Calendar"
+                      />
+                    </td>
+
                     {/* Fecha */}
                     <td
-                      className={`py-space-md px-space-lg font-semibold whitespace-nowrap ${
+                      className={`py-space-md px-space-md font-semibold whitespace-nowrap ${
                         isOverdue ? "text-tertiary" : "text-on-surface"
                       }`}
                     >
@@ -133,7 +169,7 @@ export const ExpenseTable: React.FC<ExpenseTableProps> = ({
                       </div>
                     </td>
 
-                    {/* Concepto & Categoría */}
+                    {/* Concepto & Categoría con ícono elegido */}
                     <td className="py-space-md px-space-lg">
                       <div className="flex items-center gap-space-sm">
                         <div
@@ -231,6 +267,7 @@ export const ExpenseTable: React.FC<ExpenseTableProps> = ({
                     {/* Acciones */}
                     <td className="py-space-md px-space-lg text-right">
                       <div className="flex items-center justify-end gap-1">
+                        {/* Toggle Hecho/Pendiente */}
                         <button
                           className={`btn-toggle-status w-8 h-8 rounded-lg bg-surface-container flex items-center justify-center transition-colors ${
                             isPaid
@@ -250,22 +287,24 @@ export const ExpenseTable: React.FC<ExpenseTableProps> = ({
                           </span>
                         </button>
 
+                        {/* Exportar a Google Calendar */}
                         <button
                           className="btn-sync-cal w-8 h-8 rounded-lg bg-surface-container hover:bg-primary/20 text-primary flex items-center justify-center transition-colors"
-                          title="Sincronizar a Google Calendar"
+                          title="Opciones de exportación a Google Calendar"
                           type="button"
-                          onClick={() => onSyncCalendar(expense)}
+                          onClick={() => onOpenCalendarExport(expense)}
                         >
                           <span className="material-symbols-outlined text-[18px]">
                             event
                           </span>
                         </button>
 
+                        {/* Editar Gasto */}
                         <button
                           className="w-8 h-8 rounded-lg bg-surface-container hover:bg-surface-container-high text-on-surface-variant hover:text-on-surface flex items-center justify-center transition-colors"
-                          title="Editar Gasto"
+                          title="Editar este gasto"
                           type="button"
-                          onClick={() => onEditExpense && onEditExpense(expense)}
+                          onClick={() => onEditExpense(expense)}
                         >
                           <span className="material-symbols-outlined text-[18px]">
                             edit
@@ -286,6 +325,7 @@ export const ExpenseTable: React.FC<ExpenseTableProps> = ({
         <div className="flex items-center gap-space-md font-body-sm text-body-sm text-on-surface-variant">
           <span>
             Mostrando <strong>{expenses.length} gastos</strong> registrados
+            {selectedIds.length > 0 && ` (${selectedIds.length} seleccionados)`}
           </span>
           <span className="hidden sm:inline">•</span>
           <span className="hidden sm:inline">Moneda: Pesos Mexicanos (MXN)</span>

@@ -1,22 +1,40 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Expense, ExpenseCategory, BaseExpenseStatus } from "@/types/expense";
 
 interface AddExpenseModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAddExpense: (
-    newExpense: Omit<Expense, "id" | "created_at" | "updated_at">
+  onSaveExpense: (
+    expenseData: Omit<Expense, "id" | "created_at" | "updated_at">,
+    expenseId?: string
   ) => Promise<void>;
   currentMonthYear: string; // YYYY-MM
+  expenseToEdit?: Expense | null;
 }
+
+const AVAILABLE_ICONS = [
+  { name: "credit_card", label: "Tarjeta" },
+  { name: "receipt", label: "Recibo" },
+  { name: "directions_car", label: "Auto" },
+  { name: "home", label: "Hogar" },
+  { name: "water_drop", label: "Agua" },
+  { name: "bolt", label: "Luz/Gas" },
+  { name: "shopping_cart", label: "Super/Mercado" },
+  { name: "health_and_safety", label: "Salud" },
+  { name: "wifi", label: "Internet" },
+  { name: "payments", label: "Efectivo" },
+  { name: "school", label: "Educación" },
+  { name: "account_balance", label: "Banco" },
+];
 
 export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
   isOpen,
   onClose,
-  onAddExpense,
+  onSaveExpense,
   currentMonthYear,
+  expenseToEdit,
 }) => {
   const [dia, setDia] = useState<number>(1);
   const [concepto, setConcepto] = useState<string>("");
@@ -25,8 +43,32 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
   const [metodo, setMetodo] = useState<string>("Banca Móvil");
   const [monto, setMonto] = useState<string>("");
   const [estado, setEstado] = useState<BaseExpenseStatus>("Pendiente");
+  const [icono, setIcono] = useState<string>("receipt");
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string>("");
+
+  useEffect(() => {
+    if (expenseToEdit) {
+      setDia(expenseToEdit.dia || 1);
+      setConcepto(expenseToEdit.concepto || "");
+      setCategoria(expenseToEdit.categoria || "Servicios");
+      setSubtitulo(expenseToEdit.subtitulo || "");
+      setMetodo(expenseToEdit.metodo || "Banca Móvil");
+      setMonto(expenseToEdit.monto ? String(expenseToEdit.monto) : "");
+      setEstado(expenseToEdit.estado || "Pendiente");
+      setIcono(expenseToEdit.icono || "receipt");
+    } else {
+      setDia(1);
+      setConcepto("");
+      setCategoria("Servicios");
+      setSubtitulo("");
+      setMetodo("Banca Móvil");
+      setMonto("");
+      setEstado("Pendiente");
+      setIcono("receipt");
+    }
+    setErrorMsg("");
+  }, [expenseToEdit, isOpen]);
 
   if (!isOpen) return null;
 
@@ -34,67 +76,69 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
     e.preventDefault();
     setErrorMsg("");
 
-    if (!concepto.trim()) {
+    const trimmedConcepto = concepto.trim();
+    if (!trimmedConcepto) {
       setErrorMsg("Por favor ingresa el concepto del gasto.");
       return;
     }
 
     const parsedMonto = parseFloat(monto);
     if (isNaN(parsedMonto) || parsedMonto <= 0) {
-      setErrorMsg("Por favor ingresa un monto válido mayor a 0.");
+      setErrorMsg("Por favor ingresa un monto numérico válido mayor a 0 (ej. 1200.00).");
       return;
     }
 
-    if (dia < 1 || dia > 31) {
+    const parsedDia = parseInt(String(dia), 10);
+    if (isNaN(parsedDia) || parsedDia < 1 || parsedDia > 31) {
       setErrorMsg("El día de pago debe estar entre 1 y 31.");
       return;
     }
 
     try {
       setIsSubmitting(true);
-      await onAddExpense({
-        dia,
-        concepto: concepto.trim(),
-        categoria,
-        subtitulo: subtitulo.trim() || undefined,
-        metodo: metodo.trim() || "Banca Móvil",
-        monto: parsedMonto,
-        estado,
-        mes_ano: currentMonthYear,
-      });
+      await onSaveExpense(
+        {
+          dia: parsedDia,
+          concepto: trimmedConcepto,
+          categoria,
+          subtitulo: subtitulo.trim() || undefined,
+          metodo: metodo.trim() || "Banca Móvil",
+          monto: parsedMonto,
+          estado,
+          mes_ano: expenseToEdit ? expenseToEdit.mes_ano : currentMonthYear,
+          icono: icono || undefined,
+        },
+        expenseToEdit?.id
+      );
 
-      // Reset form
-      setConcepto("");
-      setSubtitulo("");
-      setMonto("");
-      setDia(1);
-      setEstado("Pendiente");
       onClose();
-    } catch (err) {
-      console.error(err);
-      setErrorMsg("Hubo un error al guardar el gasto. Intenta nuevamente.");
+    } catch (err: any) {
+      console.error("Error al guardar gasto en modal:", err);
+      setErrorMsg(err.message || "Error al conectar con la base de datos.");
     } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in">
-      <div className="w-full max-w-lg bg-surface-container-low border border-outline-variant/30 rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fade-in overflow-y-auto">
+      <div className="w-full max-w-lg bg-surface-container-low border border-outline-variant/30 rounded-2xl shadow-2xl overflow-hidden flex flex-col my-8">
         {/* Modal Header */}
         <div className="p-space-lg border-b border-outline-variant/20 flex items-center justify-between bg-surface-container/50">
           <div className="flex items-center gap-space-sm">
             <div className="w-9 h-9 rounded-lg bg-primary-container text-on-primary-container flex items-center justify-center">
               <span className="material-symbols-outlined text-[20px]">
-                add_circle
+                {expenseToEdit ? "edit" : "add_circle"}
               </span>
             </div>
             <div>
               <h3 className="font-headline-sm text-headline-sm text-on-surface font-semibold">
-                Registrar Gasto Familiar
+                {expenseToEdit ? "Editar Gasto Familiar" : "Registrar Gasto Familiar"}
               </h3>
               <p className="font-label-sm text-label-sm text-on-surface-variant">
-                Se sincronizará en tiempo real con la cuenta familiar
+                {expenseToEdit
+                  ? "Actualiza los detalles y sincroniza al instante"
+                  : `Se agregará al periodo ${currentMonthYear} en tiempo real`}
               </p>
             </div>
           </div>
@@ -124,12 +168,44 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
             </label>
             <input
               type="text"
-              placeholder="Ej. Seguro de Auto, CFE, Izzi..."
+              placeholder="Ej. Tarjeta Banamex, Seguro de Auto, Izzi..."
               value={concepto}
               onChange={(e) => setConcepto(e.target.value)}
               className="w-full bg-surface-container rounded-lg px-space-md py-2.5 text-on-surface font-body-md text-body-md placeholder:text-on-surface-variant/50 border border-outline-variant/20 focus:outline-none focus:border-primary transition-colors"
               required
             />
+          </div>
+
+          {/* Selector visual de íconos */}
+          <div>
+            <label className="block font-label-md text-label-md text-on-surface-variant uppercase tracking-wider mb-1.5">
+              Ícono Visual de Pago
+            </label>
+            <div className="grid grid-cols-6 sm:grid-cols-6 gap-1.5 p-2 bg-surface-container rounded-xl border border-outline-variant/20">
+              {AVAILABLE_ICONS.map((ic) => {
+                const isSelected = icono === ic.name;
+                return (
+                  <button
+                    key={ic.name}
+                    type="button"
+                    onClick={() => setIcono(ic.name)}
+                    className={`flex flex-col items-center justify-center p-2 rounded-lg transition-all ${
+                      isSelected
+                        ? "bg-primary text-on-primary shadow-md scale-105"
+                        : "text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high"
+                    }`}
+                    title={ic.label}
+                  >
+                    <span className="material-symbols-outlined text-[22px]">
+                      {ic.name}
+                    </span>
+                    <span className="text-[10px] mt-0.5 truncate max-w-full font-medium">
+                      {ic.label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-space-md">
@@ -219,7 +295,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
 
           <div>
             <label className="block font-label-md text-label-md text-on-surface-variant uppercase tracking-wider mb-1">
-              Estado Inicial
+              Estado de Pago
             </label>
             <div className="grid grid-cols-2 gap-2">
               <button
@@ -271,7 +347,13 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
               <span className="material-symbols-outlined text-[18px]">
                 save
               </span>
-              <span>{isSubmitting ? "Guardando..." : "Guardar Gasto"}</span>
+              <span>
+                {isSubmitting
+                  ? "Guardando..."
+                  : expenseToEdit
+                  ? "Actualizar Gasto"
+                  : "Guardar Gasto"}
+              </span>
             </button>
           </div>
         </form>

@@ -19,6 +19,7 @@ export interface Expense {
   monto: number;
   estado: BaseExpenseStatus;
   mes_ano: string; // YYYY-MM
+  icono?: string; // Material Symbol name
   created_at?: string;
   updated_at?: string;
 }

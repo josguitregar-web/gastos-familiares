@@ -9,12 +9,14 @@ import { ExpenseTable } from "@/components/ExpenseTable";
 import { ExpenseGrid } from "@/components/ExpenseGrid";
 import { BottomDock } from "@/components/BottomDock";
 import { AddExpenseModal } from "@/components/AddExpenseModal";
+import { CalendarExportModal } from "@/components/CalendarExportModal";
 import { Toast, ToastData } from "@/components/Toast";
 import { Expense, getEvaluatedStatus } from "@/types/expense";
 import {
   getGastos,
   toggleEstadoGasto,
   addGasto,
+  updateGasto,
   isSupabaseConfigured,
   supabase,
 } from "@/lib/supabase";
@@ -48,10 +50,20 @@ export default function DashboardPage() {
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
   const [selectedStatus, setSelectedStatus] = useState<string>("all");
 
+  // Selección de filas para exportación por lote
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
   // Datos y estado de carga
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+
+  // Modales
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
+  const [expenseToEdit, setExpenseToEdit] = useState<Expense | null>(null);
+
+  const [isCalendarModalOpen, setIsCalendarModalOpen] = useState<boolean>(false);
+  const [calendarTargetExpense, setCalendarTargetExpense] = useState<Expense | null>(null);
+
   const [toast, setToast] = useState<ToastData | null>(null);
 
   // Perfil de Usuario Activo
@@ -134,11 +146,11 @@ export default function DashboardPage() {
       setIsLoading(true);
       const data = await getGastos(currentPeriodKey);
       setExpenses(data);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error al cargar gastos:", err);
       setToast({
         title: "Error de Conexión",
-        message: "No se pudieron obtener los gastos del mes seleccionado.",
+        message: err.message || "No se pudieron obtener los gastos del mes seleccionado.",
         type: "warning",
       });
     } finally {
@@ -148,6 +160,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchExpenses();
+    setSelectedIds([]); // Reset selection on month change
   }, [fetchExpenses]);
 
   // Cerrar popover de mes al hacer clic fuera
@@ -173,7 +186,6 @@ export default function DashboardPage() {
     if (isSupabaseConfigured && supabase) {
       const client = supabase;
 
-      // Canal de datos en tiempo real (INSERT / UPDATE / DELETE)
       const dataChannel = client
         .channel(`gastos_realtime_${currentPeriodKey}`)
         .on(
@@ -185,7 +197,6 @@ export default function DashboardPage() {
         )
         .subscribe();
 
-      // Canal de Presencia Realtime ("Compartido con Papá")
       presenceChannel = client.channel("household_presence", {
         config: {
           presence: {
@@ -231,7 +242,6 @@ export default function DashboardPage() {
         if (presenceChannel) client.removeChannel(presenceChannel);
       };
     } else {
-      // Fallback local: BroadcastChannel para detección entre pestañas del navegador
       const channel =
         typeof window !== "undefined" && "BroadcastChannel" in window
           ? new BroadcastChannel("household_local_presence")
@@ -323,7 +333,6 @@ export default function DashboardPage() {
     const nuevoEstado = currentStatus === "Hecho" ? "Pendiente" : "Hecho";
 
     try {
-      // Optimistic Update
       setExpenses((prev) =>
         prev.map((item) =>
           item.id === expense.id ? { ...item, estado: nuevoEstado } : item
@@ -340,82 +349,87 @@ export default function DashboardPage() {
             : `"${expense.concepto}" marcado como Pendiente`,
         type: "success",
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      fetchExpenses(); // Revert on failure
+      fetchExpenses();
       setToast({
         title: "Error",
-        message: "No se pudo actualizar el estado del gasto.",
+        message: err.message || "No se pudo actualizar el estado del gasto.",
         type: "warning",
       });
     }
   };
 
-  // Sincronizar gasto individual a Google Calendar
-  const handleSyncCalendar = (expense: Expense) => {
-    const [y, m] = currentPeriodKey.split("-");
-    const diaNum = Number(expense.dia) || 1;
-    const dayStr = String(diaNum).padStart(2, "0");
-    const nextDayStr = String(Math.min(31, diaNum + 1)).padStart(2, "0");
-
-    const dateFormatted = `${y}${m}${dayStr}`;
-    const endDateFormatted = `${y}${m}${nextDayStr}`;
-
-    const details = `Monto: $${Number(expense.monto).toLocaleString("es-MX", {
-      minimumFractionDigits: 2,
-    })} MXN\nCategoría: ${expense.categoria}\nMétodo: ${expense.metodo}${
-      expense.subtitulo ? `\nDetalle: ${expense.subtitulo}` : ""
-    }\n\nOrganizado con Control de Gastos Familiares`;
-
-    const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(
-      `Pago: ${expense.concepto}`
-    )}&details=${encodeURIComponent(details)}&dates=${dateFormatted}/${endDateFormatted}`;
-
-    window.open(url, "_blank");
-
-    setToast({
-      title: "Google Calendar",
-      message: `Recordatorio de pago para "${expense.concepto}" programado con éxito`,
-      type: "success",
-    });
-  };
-
-  // Sincronizar todos los vencimientos pendientes a Google Calendar
-  const handleSyncAllCalendar = () => {
-    const pendientes = expenses.filter(
-      (e) => getEvaluatedStatus(e, referenceDate) !== "Hecho"
-    );
-
-    if (pendientes.length === 0) {
-      setToast({
-        title: "Al corriente",
-        message: "No hay pagos pendientes por agendar en este mes.",
-        type: "info",
-      });
-      return;
-    }
-
-    handleSyncCalendar(pendientes[0]);
-    if (pendientes.length > 1) {
-      setToast({
-        title: "Google Calendar",
-        message: `Sincronizando ${pendientes.length} pagos pendientes del periodo`,
-        type: "success",
-      });
-    }
-  };
-
-  // Registrar nuevo gasto
-  const handleAddExpense = async (
-    newExpense: Omit<Expense, "id" | "created_at" | "updated_at">
+  // Manejar creación o edición de gasto
+  const handleSaveExpense = async (
+    expenseData: Omit<Expense, "id" | "created_at" | "updated_at">,
+    expenseId?: string
   ) => {
-    const created = await addGasto(newExpense);
-    setExpenses((prev) => [...prev, created].sort((a, b) => a.dia - b.dia));
-    setToast({
-      title: "Gasto Registrado",
-      message: `"${newExpense.concepto}" agregado exitosamente a ${formattedPeriodLabel}`,
-      type: "success",
-    });
+    try {
+      if (expenseId) {
+        // Actualizar gasto existente
+        const updated = await updateGasto(expenseId, expenseData);
+        setExpenses((prev) =>
+          prev.map((item) => (item.id === expenseId ? updated : item)).sort((a, b) => a.dia - b.dia)
+        );
+        setToast({
+          title: "Gasto Actualizado",
+          message: `"${expenseData.concepto}" actualizado exitosamente.`,
+          type: "success",
+        });
+      } else {
+        // Crear nuevo gasto
+        const created = await addGasto(expenseData);
+        setExpenses((prev) => [...prev, created].sort((a, b) => a.dia - b.dia));
+        setToast({
+          title: "Gasto Registrado",
+          message: `"${expenseData.concepto}" agregado exitosamente a ${formattedPeriodLabel}.`,
+          type: "success",
+        });
+      }
+    } catch (error: any) {
+      console.error("Error al procesar gasto en handleSaveExpense:", error);
+      setToast({
+        title: "Error de Guardado",
+        message: error.message || "Ocurrió un error al persistir el gasto en Supabase.",
+        type: "warning",
+      });
+      throw error;
+    }
+  };
+
+  // Abrir modal de edición
+  const handleOpenEdit = (expense: Expense) => {
+    setExpenseToEdit(expense);
+    setIsModalOpen(true);
+  };
+
+  // Abrir modal de nuevo gasto
+  const handleOpenNewExpense = () => {
+    setExpenseToEdit(null);
+    setIsModalOpen(true);
+  };
+
+  // Abrir modal de exportación a Google Calendar
+  const handleOpenCalendarExport = (expense?: Expense) => {
+    setCalendarTargetExpense(expense || null);
+    setIsCalendarModalOpen(true);
+  };
+
+  // Manejar selección de filas individuales
+  const handleToggleSelectRow = (id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  // Manejar selección de todos
+  const handleToggleSelectAll = () => {
+    if (selectedIds.length === filteredExpenses.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(filteredExpenses.map((e) => e.id));
+    }
   };
 
   // Filtrado reactivo
@@ -441,6 +455,10 @@ export default function DashboardPage() {
     });
   }, [expenses, selectedCategory, selectedStatus, searchQuery, referenceDate]);
 
+  const selectedExpensesList = useMemo(() => {
+    return expenses.filter((e) => selectedIds.includes(e.id));
+  }, [expenses, selectedIds]);
+
   return (
     <>
       {/* Toast Notification */}
@@ -452,7 +470,7 @@ export default function DashboardPage() {
         selectedYear={selectedYear}
         selectedMonth={selectedMonth}
         onSelectPeriod={handleSelectPeriod}
-        onOpenAddExpense={() => setIsModalOpen(true)}
+        onOpenAddExpense={handleOpenNewExpense}
         theme={theme}
         onToggleTheme={handleToggleTheme}
         isCompanionOnline={isCompanionOnline}
@@ -642,7 +660,7 @@ export default function DashboardPage() {
                 <button
                   className="flex items-center gap-space-xs px-space-md py-2 rounded-xl bg-primary hover:bg-primary-fixed-dim text-on-primary font-semibold shadow-md transition-all active:scale-95"
                   type="button"
-                  onClick={() => setIsModalOpen(true)}
+                  onClick={handleOpenNewExpense}
                   title="Registrar un nuevo gasto para este mes"
                 >
                   <span className="material-symbols-outlined text-[20px]">
@@ -673,21 +691,49 @@ export default function DashboardPage() {
               onViewModeChange={setViewMode}
             />
 
+            {/* Barra contextual si hay filas seleccionadas para lote */}
+            {selectedIds.length > 0 && (
+              <div className="mb-4 p-3 bg-primary-container/20 border border-primary-container/40 rounded-xl flex items-center justify-between text-body-md">
+                <div className="flex items-center gap-2 text-primary-fixed font-medium">
+                  <span className="material-symbols-outlined text-[20px]">
+                    checklist
+                  </span>
+                  <span>
+                    <strong>{selectedIds.length}</strong> {selectedIds.length === 1 ? "gasto seleccionado" : "gastos seleccionados"}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleOpenCalendarExport()}
+                    className="px-3 py-1.5 rounded-lg bg-primary text-on-primary font-semibold text-body-sm flex items-center gap-1.5 shadow-sm active:scale-95"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">
+                      event
+                    </span>
+                    Exportar Selección a Calendar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedIds([])}
+                    className="px-3 py-1.5 rounded-lg bg-surface-container text-on-surface-variant hover:text-on-surface text-body-sm font-medium transition-colors"
+                  >
+                    Deseleccionar
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Section 5: Main Transactions Ledger Table or Cards Grid */}
             {viewMode === "table" ? (
               <ExpenseTable
                 expenses={filteredExpenses}
                 onToggleStatus={handleToggleStatus}
-                onSyncCalendar={handleSyncCalendar}
-                onEditExpense={(exp) => {
-                  setToast({
-                    title: exp.concepto,
-                    message: `Monto: $${Number(exp.monto).toLocaleString("es-MX", {
-                      minimumFractionDigits: 2,
-                    })} MXN • Método: ${exp.metodo}`,
-                    type: "info",
-                  });
-                }}
+                onOpenCalendarExport={handleOpenCalendarExport}
+                onEditExpense={handleOpenEdit}
+                selectedIds={selectedIds}
+                onToggleSelectRow={handleToggleSelectRow}
+                onToggleSelectAll={handleToggleSelectAll}
                 referenceDate={referenceDate}
                 monthName={monthName.substring(0, 3)}
                 year={selectedYear}
@@ -696,7 +742,10 @@ export default function DashboardPage() {
               <ExpenseGrid
                 expenses={filteredExpenses}
                 onToggleStatus={handleToggleStatus}
-                onSyncCalendar={handleSyncCalendar}
+                onOpenCalendarExport={handleOpenCalendarExport}
+                onEditExpense={handleOpenEdit}
+                selectedIds={selectedIds}
+                onToggleSelectRow={handleToggleSelectRow}
                 referenceDate={referenceDate}
                 monthName={monthName.substring(0, 3)}
               />
@@ -708,18 +757,35 @@ export default function DashboardPage() {
       {/* Section 6: Floating Pill Bottom Bar (Dock) */}
       <BottomDock
         expenses={expenses}
-        onOpenAddExpense={() => setIsModalOpen(true)}
-        onSyncAllCalendar={handleSyncAllCalendar}
+        onOpenAddExpense={handleOpenNewExpense}
+        onSyncAllCalendar={() => handleOpenCalendarExport()}
         onNextMonth={handleNextMonth}
         referenceDate={referenceDate}
       />
 
-      {/* Modal para Agregar Gasto */}
+      {/* Modal para Agregar / Editar Gasto */}
       <AddExpenseModal
         isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        onAddExpense={handleAddExpense}
+        onClose={() => {
+          setIsModalOpen(false);
+          setExpenseToEdit(null);
+        }}
+        onSaveExpense={handleSaveExpense}
         currentMonthYear={currentPeriodKey}
+        expenseToEdit={expenseToEdit}
+      />
+
+      {/* Modal Avanzado para Exportar a Google Calendar */}
+      <CalendarExportModal
+        isOpen={isCalendarModalOpen}
+        onClose={() => {
+          setIsCalendarModalOpen(false);
+          setCalendarTargetExpense(null);
+        }}
+        singleExpense={calendarTargetExpense}
+        selectedExpenses={selectedExpensesList}
+        allMonthExpenses={expenses}
+        currentPeriodLabel={formattedPeriodLabel}
       />
 
       {/* Footer */}

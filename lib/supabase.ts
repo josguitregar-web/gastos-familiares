@@ -68,7 +68,6 @@ export async function getGastos(mes_ano: string): Promise<Expense[]> {
       throw error;
     }
 
-    // Si la tabla está vacía para este mes, podemos sembrar los 14 gastos iniciales automáticamente
     if (!data || data.length === 0) {
       return await seedInitialGastos(mes_ano);
     }
@@ -80,7 +79,6 @@ export async function getGastos(mes_ano: string): Promise<Expense[]> {
   const all = getLocalData();
   const filtered = all.filter((g) => g.mes_ano === mes_ano);
   if (filtered.length === 0) {
-    // Inicializar para este mes
     const newItems: Expense[] = INITIAL_EXPENSES.map((item, idx) => ({
       ...item,
       id: `local-${mes_ano}-${idx + 1}`,
@@ -135,30 +133,67 @@ export async function toggleEstadoGasto(
 export async function addGasto(
   nuevoGasto: Omit<Expense, "id" | "created_at" | "updated_at">
 ): Promise<Expense> {
-  if (isSupabaseConfigured && supabase) {
-    const { data, error } = await supabase
-      .from("gastos")
-      .insert([
-        {
-          ...nuevoGasto,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        },
-      ])
-      .select()
-      .single();
+  const payload = {
+    dia: parseInt(String(nuevoGasto.dia), 10),
+    monto: parseFloat(String(nuevoGasto.monto)),
+    concepto: String(nuevoGasto.concepto).trim(),
+    categoria: nuevoGasto.categoria,
+    subtitulo: nuevoGasto.subtitulo ? String(nuevoGasto.subtitulo).trim() : null,
+    metodo: String(nuevoGasto.metodo || "Banca Móvil").trim(),
+    estado: nuevoGasto.estado || "Pendiente",
+    mes_ano: String(nuevoGasto.mes_ano),
+    icono: nuevoGasto.icono ? String(nuevoGasto.icono).trim() : null,
+  };
 
-    if (error) {
-      console.error("Error adding gasto to Supabase:", error);
-      throw error;
+  if (isNaN(payload.dia) || payload.dia < 1 || payload.dia > 31) {
+    throw new Error("El día de pago debe ser un número entero entre 1 y 31.");
+  }
+  if (isNaN(payload.monto) || payload.monto <= 0) {
+    throw new Error("El monto debe ser un número numérico mayor a cero.");
+  }
+  if (!payload.concepto) {
+    throw new Error("El concepto del gasto es obligatorio.");
+  }
+  if (!payload.mes_ano) {
+    throw new Error("El periodo mes_ano es obligatorio.");
+  }
+
+  if (isSupabaseConfigured && supabase) {
+    try {
+      const { data, error } = await supabase
+        .from("gastos")
+        .insert([
+          {
+            ...payload,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+        ])
+        .select()
+        .single();
+
+      if (error) {
+        console.error("Supabase insert error details:", {
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+          code: error.code,
+        });
+        throw new Error(error.message || "Error al insertar en Supabase.");
+      }
+      return data as Expense;
+    } catch (err: any) {
+      console.error("Error executing addGasto:", err);
+      throw err;
     }
-    return data as Expense;
   }
 
   // Fallback Local Storage
   const all = getLocalData();
   const created: Expense = {
-    ...nuevoGasto,
+    ...payload,
+    subtitulo: payload.subtitulo || undefined,
+    icono: payload.icono || undefined,
     id: `local-gasto-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -166,6 +201,88 @@ export async function addGasto(
 
   saveLocalData([...all, created]);
   return created;
+}
+
+export async function updateGasto(
+  id: string,
+  payloadUpdate: Partial<Omit<Expense, "id" | "created_at" | "updated_at">>
+): Promise<Expense> {
+  const sanitized: Record<string, any> = {
+    updated_at: new Date().toISOString(),
+  };
+
+  if (payloadUpdate.dia !== undefined) {
+    sanitized.dia = parseInt(String(payloadUpdate.dia), 10);
+  }
+  if (payloadUpdate.monto !== undefined) {
+    sanitized.monto = parseFloat(String(payloadUpdate.monto));
+  }
+  if (payloadUpdate.concepto !== undefined) {
+    sanitized.concepto = String(payloadUpdate.concepto).trim();
+  }
+  if (payloadUpdate.categoria !== undefined) {
+    sanitized.categoria = payloadUpdate.categoria;
+  }
+  if (payloadUpdate.subtitulo !== undefined) {
+    sanitized.subtitulo = payloadUpdate.subtitulo ? String(payloadUpdate.subtitulo).trim() : null;
+  }
+  if (payloadUpdate.metodo !== undefined) {
+    sanitized.metodo = String(payloadUpdate.metodo).trim();
+  }
+  if (payloadUpdate.estado !== undefined) {
+    sanitized.estado = payloadUpdate.estado;
+  }
+  if (payloadUpdate.mes_ano !== undefined) {
+    sanitized.mes_ano = String(payloadUpdate.mes_ano);
+  }
+  if (payloadUpdate.icono !== undefined) {
+    sanitized.icono = payloadUpdate.icono ? String(payloadUpdate.icono).trim() : null;
+  }
+
+  if (isSupabaseConfigured && supabase) {
+    try {
+      const { data, error } = await supabase
+        .from("gastos")
+        .update(sanitized)
+        .eq("id", id)
+        .select()
+        .single();
+
+      if (error) {
+        console.error("Supabase update error details:", {
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+          code: error.code,
+        });
+        throw new Error(error.message || "Error al actualizar en Supabase.");
+      }
+      return data as Expense;
+    } catch (err: any) {
+      console.error("Error executing updateGasto:", err);
+      throw err;
+    }
+  }
+
+  // Fallback Local Storage
+  const all = getLocalData();
+  let updatedItem: Expense | null = null;
+  const nextData = all.map((item) => {
+    if (item.id === id) {
+      updatedItem = {
+        ...item,
+        ...sanitized,
+        subtitulo: sanitized.subtitulo ?? item.subtitulo,
+        icono: sanitized.icono ?? item.icono,
+      };
+      return updatedItem;
+    }
+    return item;
+  });
+
+  saveLocalData(nextData);
+  if (!updatedItem) throw new Error("Gasto no encontrado");
+  return updatedItem;
 }
 
 export async function deleteGasto(id: string): Promise<boolean> {
